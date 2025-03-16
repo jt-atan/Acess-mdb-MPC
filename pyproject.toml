@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mcp-access"
+version = "0.1.0"
+description = "MCP tool for connecting to MS Access 32-bit databases"
+readme = "README.md"
+requires-python = ">=3.8"
+authors = [
+    {name = "MCP Access Tool"}
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: Microsoft :: Windows",
+]
+dependencies = [
+    "mcp>=0.1.0",
+    "pyodbc>=4.0.0",
+    "anyio>=3.6.2",
+    "click>=8.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "black>=23.1.0",
+    "isort>=5.12.0",
+    "mypy>=1.0.1",
+]
+
+[project.scripts]
+mcp-access = "mcp_access.__main__:main"
+
+[tool.black]
+line-length = 88
+target-version = ["py38"]
+
+[tool.isort]
+profile = "black"

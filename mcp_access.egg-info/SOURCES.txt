@@ -1,0 +1,11 @@
+README.md
+pyproject.toml
+mcp_access/__init__.py
+mcp_access/__main__.py
+mcp_access/server.py
+mcp_access.egg-info/PKG-INFO
+mcp_access.egg-info/SOURCES.txt
+mcp_access.egg-info/dependency_links.txt
+mcp_access.egg-info/entry_points.txt
+mcp_access.egg-info/requires.txt
+mcp_access.egg-info/top_level.txt

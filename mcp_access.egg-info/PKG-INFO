@@ -1,0 +1,54 @@
+Metadata-Version: 2.2
+Name: mcp-access
+Version: 0.1.0
+Summary: MCP tool for connecting to MS Access 32-bit databases
+Author: MCP Access Tool
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: Microsoft :: Windows
+Requires-Python: >=3.8
+Description-Content-Type: text/markdown
+Requires-Dist: mcp>=0.1.0
+Requires-Dist: pyodbc>=4.0.0
+Requires-Dist: anyio>=3.6.2
+Requires-Dist: click>=8.0.0
+Provides-Extra: dev
+Requires-Dist: black>=23.1.0; extra == "dev"
+Requires-Dist: isort>=5.12.0; extra == "dev"
+Requires-Dist: mypy>=1.0.1; extra == "dev"
+
+# MCP Access Database Connector
+
+A Model Context Protocol (MCP) tool for connecting to 32-bit Microsoft Access databases.
+
+## Features
+
+- Connect to MS Access MDB databases using 32-bit drivers
+- Query database tables and views
+- Run SQL queries against Access databases
+- View table structures
+
+## Requirements
+
+- Windows OS (for MS Access drivers)
+- Python 3.8 or higher
+- 32-bit ODBC driver for Microsoft Access
+
+## Installation
+
+1. Install the 32-bit Microsoft Access Database Engine 2016 or appropriate driver
+2. Install the package:
+```
+pip install -e .
+```
+
+## Usage
+
+Run the MCP server:
+```
+python -m mcp_access
+```
+
+## License
+
+MIT
