@@ -20,7 +20,7 @@ async def test_connection():
     # Set up the client parameters correctly using StdioServerParameters
     server_params = StdioServerParameters(
         command=sys.executable,
-        args=["-m", "mcp_access"]
+        args=["__main__.py"]  # Use the root module directly
     )
     
     async with stdio_client(server_params) as (read, write):

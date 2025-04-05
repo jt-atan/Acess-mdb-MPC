@@ -17,7 +17,7 @@ classifiers = [
     "Operating System :: Microsoft :: Windows",
 ]
 dependencies = [
-    "mcp>=0.1.0",
+    "mcp>=0.3.0",
     "pyodbc>=4.0.0",
     "anyio>=3.6.2",
     "click>=8.0.0",
@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-mcp-access = "__main__:main"
+mcp-access = "server:main"
 
 [tool.black]
 line-length = 88

@@ -4,6 +4,7 @@ import anyio
 import click
 import pyodbc
 import hashlib
+import sys
 from datetime import datetime, date
 from mcp.server.fastmcp import FastMCP
 
@@ -487,9 +488,14 @@ def main():
     if CLAUDE_FILES_PATH and not os.path.exists(CLAUDE_FILES_PATH):
         try:
             os.makedirs(CLAUDE_FILES_PATH)
-            print(f"Created directory for Claude files: {CLAUDE_FILES_PATH}")
+            print(f"Created directory for Claude files: {CLAUDE_FILES_PATH}", file=sys.stderr)
         except Exception as e:
-            print(f"Warning: Could not create directory for Claude files: {e}")
+            print(f"Warning: Could not create directory for Claude files: {e}", file=sys.stderr)
+    
+    # Print server information
+    print(f"Starting MS Access Connector MCP server...", file=sys.stderr)
+    print(f"Python version: {os.sys.version}", file=sys.stderr)
+    print(f"Current directory: {os.getcwd()}", file=sys.stderr)
     
     # Run the server with default settings
     mcp.run()

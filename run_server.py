@@ -5,7 +5,7 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from mcp_access.server import main
+from server import main
 
 if __name__ == "__main__":
     # Set up environment variables if not already set
