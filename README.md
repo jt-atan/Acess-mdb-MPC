@@ -68,6 +68,7 @@ Make sure to:
 1. Replace `yourusername` and `path\\to` with your actual path
 2. Use the full absolute path to the server.py file
 3. Set the correct working directory (cwd)
+4. If using a virtual environment, replace `"command": "python"` with the path to your virtual environment's Python interpreter (e.g., `"command": "C:\\Users\\yourusername\\path\\to\\Access_mdb\\venv\\Scripts\\python.exe"`)
 
 #### For Claude Desktop:
 
@@ -81,6 +82,21 @@ Make sure to:
      "mcpServers": {
        "access-mdb": {
          "command": "python",
+         "args": [
+           "C:\\Users\\yourusername\\path\\to\\Access_mdb\\server.py"
+         ],
+         "cwd": "C:\\Users\\yourusername\\path\\to\\Access_mdb"
+       }
+     }
+   }
+   ```
+
+   **Important Note**: If you installed the tool in a virtual environment, you must use the Python interpreter from that environment:
+   ```json
+   {
+     "mcpServers": {
+       "access-mdb": {
+         "command": "C:\\Users\\yourusername\\path\\to\\Access_mdb\\venv\\Scripts\\python.exe",
          "args": [
            "C:\\Users\\yourusername\\path\\to\\Access_mdb\\server.py"
          ],
