@@ -21,7 +21,7 @@ This guide assumes you already have 32-bit Microsoft Access Database Engine inst
 ### Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/yourusername/Access_mdb.git
+git clone https://github.com/jt-atan/Acess-mdb-MPC.git
 cd Access_mdb
 ```
 
