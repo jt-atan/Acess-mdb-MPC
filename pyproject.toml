@@ -31,7 +31,7 @@ dev = [
 ]
 
 [project.scripts]
-mcp-access = "mcp_access.__main__:main"
+mcp-access = "__main__:main"
 
 [tool.black]
 line-length = 88

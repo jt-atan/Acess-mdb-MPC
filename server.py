@@ -1,201 +1,497 @@
-import os, json, hashlib
-from typing import Optional
+import os
+import json
+import anyio
+import click
+import pyodbc
+import hashlib
 from datetime import datetime, date
 from mcp.server.fastmcp import FastMCP
-from sqlalchemy import create_engine, inspect, text
-import urllib.parse
-import os.path
 
-### Database ###
+# Create the FastMCP server
+mcp = FastMCP("MS Access Connector")
 
-def get_engine(readonly=True):
-    connection_string = os.environ['DB_URL']
-    
-    # Handle MS Access connection
-    if connection_string.startswith('access://'):
-        # Parse the access:// URL to extract the file path
-        path = connection_string.replace('access://', '')
-        # URL decode the path in case it contains special characters
-        path = urllib.parse.unquote(path)
-        # Ensure the path is absolute and normalized
-        path = os.path.abspath(path)
-        # Use the exact connection string format that was verified to work
-        odbc_conn_str = f"DRIVER={{Microsoft Access Driver (*.mdb)}};DBQ={path}"
-        connection_string = f"access+pyodbc:///?odbc_connect={urllib.parse.quote_plus(odbc_conn_str)}"
-    
-    return create_engine(connection_string, isolation_level='AUTOCOMMIT', execution_options={'readonly': readonly})
+# Store connections in a dictionary
+connections = {}
 
-def get_db_info():
-    engine = get_engine(readonly=True)
-    with engine.connect() as conn:
-        url = engine.url
-        
-        # Check if it's an Access database
-        if str(url).startswith('access'):
-            db_type = "MS Access"
-            version = "N/A"
-            database = os.environ['DB_URL'].replace('access://', '')
-            database = urllib.parse.unquote(database)
-            host = "N/A"
-            username = "N/A"
-        else:
-            db_type = engine.dialect.name
-            version = '.'.join(str(x) for x in engine.dialect.server_version_info) if hasattr(engine.dialect, 'server_version_info') else "N/A"
-            database = url.database
-            host = url.host
-            username = url.username
-            
-        return (f"Connected to {db_type} "
-                f"version {version} "
-                f"database '{database}' on {host} "
-                f"as user '{username}'")
-
-### Constants ###
-
-DB_INFO = get_db_info()
+# Configuration constants
 EXECUTE_QUERY_MAX_CHARS = int(os.environ.get('EXECUTE_QUERY_MAX_CHARS', 4000))
 CLAUDE_FILES_PATH = os.environ.get('CLAUDE_LOCAL_FILES_PATH')
 
-### MCP ###
+async def connect_to_access_db(
+    db_path: str,
+) -> pyodbc.Connection:
+    """Connect to an Access database using the 32-bit ODBC driver."""
+    # Note: Must be running on Windows with 32-bit Access ODBC driver installed
+    connection_string = f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={db_path};"
+    
+    # Use a thread pool to run ODBC operations asynchronously
+    # since pyodbc operations are blocking
+    connection = await anyio.to_thread.run_sync(
+        lambda: pyodbc.connect(connection_string)
+    )
+    return connection
 
-mcp = FastMCP("MCP Alchemy")
 
-@mcp.tool(description=f"Return all table names in the database separated by comma. {DB_INFO}")
-def all_table_names() -> str:
-    engine = get_engine()
-    inspector = inspect(engine)
-    return ", ".join(inspector.get_table_names())
+async def list_tables(
+    connection: pyodbc.Connection,
+) -> list[str]:
+    """List all tables in the Access database."""
+    def _get_tables():
+        cursor = connection.cursor()
+        tables = [table.table_name for table in cursor.tables() 
+                 if table.table_type == 'TABLE']
+        cursor.close()
+        return tables
+    
+    tables = await anyio.to_thread.run_sync(_get_tables)
+    return tables
 
-@mcp.tool(
-    description=f"Return all table names in the database containing the substring 'q' separated by comma. {DB_INFO}"
-)
-def filter_table_names(q: str) -> str:
-    engine = get_engine()
-    inspector = inspect(engine)
-    return ", ".join(x for x in inspector.get_table_names() if q in x)
 
-@mcp.tool(description=f"Returns schema and relation information for the given tables. {DB_INFO}")
-def schema_definitions(table_names: list[str]) -> str:
-    def format(inspector, table_name):
-        columns = inspector.get_columns(table_name)
-        foreign_keys = inspector.get_foreign_keys(table_name)
-        primary_keys = set(inspector.get_pk_constraint(table_name)["constrained_columns"])
-        result = [f"{table_name}:"]
+async def query_table(
+    connection: pyodbc.Connection,
+    table_name: str,
+    limit: int = 100,
+) -> list[dict]:
+    """Query data from a table."""
+    def _run_query():
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT TOP {limit} * FROM [{table_name}]")
+        columns = [column[0] for column in cursor.description]
+        results = []
+        for row in cursor.fetchall():
+            # Convert row to a list of values that can be serialized to JSON
+            row_values = [str(value) if isinstance(value, (bytes, bytearray)) else value for value in row]
+            results.append(dict(zip(columns, row_values)))
+        cursor.close()
+        return results
+    
+    results = await anyio.to_thread.run_sync(_run_query)
+    return results
 
-        # Process columns
-        show_key_only = {"nullable", "autoincrement"}
-        for column in columns:
-            if "comment" in column:
-                del column["comment"]
-            name = column.pop("name")
-            column_parts = (["primary key"] if name in primary_keys else []) + [str(
-                column.pop("type"))] + [k if k in show_key_only else f"{k}={v}" for k, v in column.items() if v]
-            result.append(f"    {name}: " + ", ".join(column_parts))
 
-        # Process relationships
-        if foreign_keys:
-            result.extend(["", "    Relationships:"])
-            for fk in foreign_keys:
-                constrained_columns = ", ".join(fk['constrained_columns'])
-                referred_table = fk['referred_table']
-                referred_columns = ", ".join(fk['referred_columns'])
-                result.append(f"      {constrained_columns} -> {referred_table}.{referred_columns}")
+async def execute_sql(
+    connection: pyodbc.Connection,
+    sql_query: str,
+) -> dict:
+    """Execute a custom SQL query."""
+    def _run_query():
+        cursor = connection.cursor()
+        cursor.execute(sql_query)
+        
+        # If the query returns results
+        if cursor.description:
+            columns = [column[0] for column in cursor.description]
+            results = []
+            for row in cursor.fetchall():
+                # Convert row to a list of values that can be serialized to JSON
+                row_values = [str(value) if isinstance(value, (bytes, bytearray)) else value for value in row]
+                results.append(dict(zip(columns, row_values)))
+            return {"result_type": "query", "data": results}
+        else:
+            # For non-query operations like INSERT, UPDATE, DELETE
+            connection.commit()
+            return {"result_type": "command", "rows_affected": cursor.rowcount}
+    
+    result = await anyio.to_thread.run_sync(_run_query)
+    return result
 
-        return "\n".join(result)
 
-    engine = get_engine()
-    inspector = inspect(engine)
-    return "\n".join(format(inspector, table_name) for table_name in table_names)
+async def get_table_schema(
+    connection: pyodbc.Connection,
+    table_name: str,
+) -> list[dict]:
+    """Get the schema of a specific table."""
+    def _get_schema():
+        cursor = connection.cursor()
+        cursor.execute(f"SELECT TOP 1 * FROM [{table_name}]")
+        columns = []
+        for column in cursor.description:
+            columns.append({
+                "name": column[0],
+                "type": type_mapping.get(column[1].__name__, column[1].__name__),
+                "nullable": column[6],
+            })
+        cursor.close()
+        return columns
+    
+    # Mapping from Python types to more friendly names
+    type_mapping = {
+        "str": "text",
+        "int": "integer",
+        "float": "float",
+        "datetime": "datetime",
+        "bool": "boolean",
+        "bytes": "binary",
+    }
+    
+    schema = await anyio.to_thread.run_sync(_get_schema)
+    return schema
 
-def execute_query_description():
-    parts = [
-        f"Execute a SQL query and return results in a readable format. Results will be truncated after {EXECUTE_QUERY_MAX_CHARS} characters."
-    ]
-    if CLAUDE_FILES_PATH:
-        parts.append("Claude Desktop may fetch the full result set via an url for analysis and artifacts.")
-    parts.append(DB_INFO)
-    return " ".join(parts)
 
-@mcp.tool(description=execute_query_description())
-def execute_query(query: str, params: Optional[dict] = None) -> str:
-    def format_value(val):
-        """Format a value for display, handling None and datetime types"""
-        if val is None:
-            return "NULL"
-        if isinstance(val, (datetime, date)):
-            return val.isoformat()
-        return str(val)
+async def get_extended_schema(
+    connection: pyodbc.Connection,
+    table_name: str,
+) -> dict:
+    """Get more detailed schema including primary keys and indexes."""
+    schema_info = await get_table_schema(connection, table_name)
+    
+    def _get_primary_keys_and_indexes():
+        cursor = connection.cursor()
+        primary_keys = []
+        indexes = []
+        
+        # Get indexes (which include primary keys in Access)
+        try:
+            # This will get all indexes in the table
+            for index_info in cursor.statistics(table=table_name):
+                if index_info[5]:  # index_name is not None
+                    index_name = index_info[5]
+                    column_name = index_info[8]
+                    is_unique = not index_info[6]  # non_unique = 0 means it's unique
+                    
+                    # In Access, primary key is typically an index named "PrimaryKey"
+                    if index_name == "PrimaryKey" or "PK" in index_name:
+                        primary_keys.append(column_name)
+                    
+                    # Store index information
+                    indexes.append({
+                        "name": index_name,
+                        "column": column_name,
+                        "unique": is_unique
+                    })
+        except Exception as e:
+            # Access databases might not fully support this method
+            pass
+            
+        # If we didn't find primary keys using statistics, try another approach
+        if not primary_keys:
+            try:
+                # Try to find primary keys using a heuristic approach for Access
+                # In Access, primary keys often have an AutoNumber data type
+                cursor.execute(f"SELECT TOP 1 * FROM [{table_name}]")
+                for i, col in enumerate(cursor.description):
+                    col_name = col[0]
+                    if col[5]:  # is_autoincrement flag
+                        primary_keys.append(col_name)
+            except:
+                pass
+        
+        cursor.close()
+        return {"primary_keys": primary_keys, "indexes": indexes}
+    
+    pk_index_info = await anyio.to_thread.run_sync(_get_primary_keys_and_indexes)
+    
+    # Mark primary keys in the schema
+    for column in schema_info:
+        column["primary_key"] = column["name"] in pk_index_info["primary_keys"]
+    
+    return {
+        "columns": schema_info,
+        "primary_keys": pk_index_info["primary_keys"],
+        "indexes": pk_index_info["indexes"]
+    }
 
-    def format_results(columns, rows):
-        """Format rows in a clean vertical format"""
-        output = ""
-        curr_size, row_displayed = 0, 0
 
-        for i, row in enumerate(rows, 1):
-            line = f"{i}. row\n"
-            for col, val in zip(columns, row):
-                line += f"{col}: {format_value(val)}\n"
-            line += "\n"
-            curr_size += len(line)
+def format_value(val):
+    """Format a value for display, handling None and datetime types"""
+    if val is None:
+        return "NULL"
+    if isinstance(val, (datetime, date)):
+        return val.isoformat()
+    return str(val)
 
-            if curr_size > EXECUTE_QUERY_MAX_CHARS:
-                break
-            output += line
-            row_displayed = i
 
-        return row_displayed, output
+def format_results(results, max_chars=None):
+    """Format rows in a clean vertical format with intelligent truncation"""
+    if not max_chars:
+        max_chars = EXECUTE_QUERY_MAX_CHARS
+        
+    output = ""
+    row_displayed = 0
+    current_size = 0
+    
+    for i, row in enumerate(results, 1):
+        line = f"{i}. row\n"
+        for col, val in row.items():
+            line += f"{col}: {format_value(val)}\n"
+        line += "\n"
+        
+        current_size += len(line)
+        if max_chars and current_size > max_chars:
+            break
+            
+        output += line
+        row_displayed = i
+    
+    # Add summary information
+    total_rows = len(results)
+    output += f"\nResult: {total_rows} rows"
+    if row_displayed < total_rows:
+        output += f" (output truncated, showing {row_displayed} of {total_rows})"
+    
+    return output, row_displayed
 
-    def save_full_results(rows, columns):
-        """Save complete result set for Claude if configured"""
-        if not CLAUDE_FILES_PATH:
-            return ""
 
-        def serialize_row(row):
-            return [format_value(val) for val in row]
-
-        data = [serialize_row(row) for row in rows]
-        file_hash = hashlib.sha256(json.dumps(data).encode()).hexdigest()
-        file_name = f"{file_hash}.json"
-
-        with open(os.path.join(CLAUDE_FILES_PATH, file_name), 'w') as f:
-            json.dump(data, f)
-
-        return (
-            f"\nFull result set url: https://cdn.jsdelivr.net/pyodide/claude-local-files/{file_name}"
-            " (format: [[row1_value1, row1_value2, ...], [row2_value1, row2_value2, ...], ...]])"
-            " (ALWAYS prefer fetching this url in artifacts instead of hardcoding the values if at all possible)")
-
+def save_results_for_claude(results):
+    """Save full result sets as JSON files for Claude to access"""
+    if not CLAUDE_FILES_PATH:
+        return ""
+        
+    # Create a serializable version of the results
+    serializable_results = json.dumps(results)
+    file_hash = hashlib.sha256(serializable_results.encode()).hexdigest()
+    file_name = f"{file_hash}.json"
+    file_path = os.path.join(CLAUDE_FILES_PATH, file_name)
+    
     try:
-        engine = get_engine(readonly=False)
-        with engine.connect() as connection:
-            result = connection.execute(text(query), params or {})
-
-            if not result.returns_rows:
-                return f"Success: {result.rowcount} rows affected"
-
-            columns = result.keys()
-            all_rows = result.fetchall()
-
-            if not all_rows:
-                return "No rows returned"
-
-            # Format results and handle truncation if needed
-            row_displayed, output = format_results(columns, all_rows)
-
-            # Add summary and full results link
-            output += f"\nResult: {len(all_rows)} rows"
-            if row_displayed < len(all_rows):
-                output += " (output truncated)"
-
-            if full_results := save_full_results(all_rows, columns):
-                output += full_results
-
-            return output
+        with open(file_path, 'w') as f:
+            f.write(serializable_results)
+            
+        return (f"\nFull result set url: https://cdn.jsdelivr.net/pyodide/claude-local-files/{file_name}"
+                " (format: JSON array of objects)"
+                " (ALWAYS prefer fetching this url in artifacts instead of hardcoding the values)")
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"\nError saving results for Claude: {str(e)}"
+
+
+# Define MCP tools using FastMCP decorators
+
+@mcp.tool()
+async def connect(db_path: str) -> str:
+    """Connect to an MS Access database
+    
+    Args:
+        db_path: Path to the MS Access .mdb file
+    
+    Returns:
+        A message indicating success or failure
+    """
+    conn_id = os.path.basename(db_path)
+    
+    try:
+        connection = await connect_to_access_db(db_path)
+        connections[conn_id] = connection
+        return f"Successfully connected to database: {db_path}"
+    except Exception as e:
+        return f"Error connecting to database: {str(e)}"
+
+
+@mcp.tool()
+async def list_tables_tool(conn_id: str) -> str:
+    """List all tables in the connected database
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+    
+    Returns:
+        A comma-separated list of table names
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        tables = await list_tables(connections[conn_id])
+        return f"Tables in database: {', '.join(tables)}"
+    except Exception as e:
+        return f"Error listing tables: {str(e)}"
+
+
+@mcp.tool()
+async def filter_tables_tool(conn_id: str, substring: str) -> str:
+    """List tables containing a specific substring
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+        substring: Substring to search for in table names (case insensitive)
+    
+    Returns:
+        A comma-separated list of matching table names
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        all_tables = await list_tables(connections[conn_id])
+        filtered_tables = [table for table in all_tables if substring.lower() in table.lower()]
+        
+        if filtered_tables:
+            return f"Tables containing '{substring}': {', '.join(filtered_tables)}"
+        else:
+            return f"No tables found containing '{substring}'"
+    except Exception as e:
+        return f"Error filtering tables: {str(e)}"
+
+
+@mcp.tool()
+async def query_table_tool(conn_id: str, table_name: str, limit: int = 100) -> str:
+    """Query data from a table
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+        table_name: Name of the table to query
+        limit: Maximum number of rows to return (default: 100)
+    
+    Returns:
+        Formatted query results
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        results = await query_table(connections[conn_id], table_name, limit)
+        
+        if not results:
+            return f"No data found in table '{table_name}'"
+            
+        # Format the results using the improved formatter
+        formatted_output, row_displayed = format_results(results)
+        
+        # For large result sets, save them for Claude
+        if len(results) > row_displayed and CLAUDE_FILES_PATH:
+            claude_link = save_results_for_claude(results)
+            formatted_output += claude_link
+            
+        return formatted_output
+    except pyodbc.Error as e:
+        error_msg = str(e)
+        suggestions = ""
+        
+        if "not a valid name" in error_msg.lower():
+            suggestions = "\nPossible fix: Make sure the table name is correct and enclosed in square brackets if it contains spaces or special characters."
+            
+        return f"Database Error: {error_msg}{suggestions}"
+    except Exception as e:
+        return f"Error querying table: {str(e)}"
+
+
+@mcp.tool()
+async def execute_sql_tool(conn_id: str, sql_query: str) -> str:
+    """Execute a custom SQL query
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+        sql_query: SQL query to execute
+    
+    Returns:
+        Formatted query results or command results
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        result = await execute_sql(connections[conn_id], sql_query)
+        
+        if result["result_type"] == "command":
+            return f"Command executed successfully. Rows affected: {result['rows_affected']}"
+        else:
+            data = result["data"]
+            if not data:
+                return "Query executed successfully. No rows returned."
+                
+            # Format the results using the improved formatter
+            formatted_output, row_displayed = format_results(data)
+            
+            # For large result sets, save them for Claude
+            if len(data) > row_displayed and CLAUDE_FILES_PATH:
+                claude_link = save_results_for_claude(data)
+                formatted_output += claude_link
+                
+            return formatted_output
+    except pyodbc.Error as e:
+        error_msg = str(e)
+        suggestions = ""
+        
+        # Add helpful suggestions based on common errors
+        if "syntax error" in error_msg.lower():
+            suggestions = "\nPossible fix: Check your SQL syntax for errors."
+        elif "no such table" in error_msg.lower() or "invalid object name" in error_msg.lower():
+            suggestions = "\nPossible fix: Verify the table name exists."
+        elif "ambiguous column name" in error_msg.lower():
+            suggestions = "\nPossible fix: Fully qualify column names with table names."
+            
+        return f"SQL Error: {error_msg}{suggestions}"
+    except Exception as e:
+        return f"Error executing query: {str(e)}"
+
+
+@mcp.tool()
+async def get_table_schema_tool(conn_id: str, table_name: str) -> str:
+    """Get the schema of a specific table
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+        table_name: Name of the table to examine
+    
+    Returns:
+        Formatted schema information
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        schema_info = await get_extended_schema(connections[conn_id], table_name)
+        
+        # Format the schema information in a readable way
+        output = [f"Schema for table '{table_name}':"]
+        output.append("\nCOLUMNS:")
+        
+        for column in schema_info["columns"]:
+            pk_indicator = "[PK] " if column.get("primary_key") else ""
+            nullable = "NULL" if column.get("nullable") else "NOT NULL"
+            output.append(f"  {pk_indicator}{column['name']}: {column['type']}, {nullable}")
+        
+        # Add primary key information
+        if schema_info["primary_keys"]:
+            output.append("\nPRIMARY KEYS:")
+            for pk in schema_info["primary_keys"]:
+                output.append(f"  {pk}")
+        
+        # Add index information
+        if schema_info["indexes"]:
+            output.append("\nINDEXES:")
+            for idx in schema_info["indexes"]:
+                unique = "UNIQUE " if idx.get("unique") else ""
+                output.append(f"  {unique}INDEX {idx['name']} on {idx['column']}")
+        
+        return "\n".join(output)
+    except pyodbc.Error as e:
+        return f"Database Error: {str(e)}"
+    except Exception as e:
+        return f"Error getting table schema: {str(e)}"
+
+
+@mcp.tool()
+async def disconnect(conn_id: str) -> str:
+    """Disconnect from a database
+    
+    Args:
+        conn_id: Connection ID (filename of database)
+    
+    Returns:
+        A message indicating success or failure
+    """
+    if conn_id not in connections:
+        return f"Connection {conn_id} not found"
+    
+    try:
+        await anyio.to_thread.run_sync(lambda: connections[conn_id].close())
+        del connections[conn_id]
+        return f"Successfully disconnected from {conn_id}"
+    except Exception as e:
+        return f"Error disconnecting: {str(e)}"
 
 
 def main():
+    """Run the MCP Access server"""
+    # Check for required CLAUDE_FILES_PATH environment variable
+    if CLAUDE_FILES_PATH and not os.path.exists(CLAUDE_FILES_PATH):
+        try:
+            os.makedirs(CLAUDE_FILES_PATH)
+            print(f"Created directory for Claude files: {CLAUDE_FILES_PATH}")
+        except Exception as e:
+            print(f"Warning: Could not create directory for Claude files: {e}")
+    
+    # Run the server with default settings
     mcp.run()
 
 
