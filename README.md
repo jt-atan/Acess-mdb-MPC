@@ -4,73 +4,108 @@ A Model Context Protocol (MCP) tool for connecting to 32-bit Microsoft Access da
 
 ## Features
 
-- Connect to MS Access MDB databases using 32-bit drivers
+- Connect to MS Access MDB databases using 32-bit ODBC drivers
 - Query database tables and views
 - Run SQL queries against Access databases
 - View table structures
+- Filter tables by name
+- Enhanced schema information with primary keys and indexes
+- Improved result formatting with vertical display
+- Intelligent truncation for large result sets
+- Claude integration for large result sets
 
-## Requirements
+## Prerequisites
 
-- Windows OS (for MS Access drivers)
-- Python 3.8 or higher
-- 32-bit ODBC driver for Microsoft Access
-- Node.js (for Claude Desktop and Windsurf IDE integration)
+Before you begin, ensure you have the following installed:
 
-## Installation
+- **Windows OS** (required for Microsoft Access ODBC drivers)
+- **Python 3.8 or higher** (32-bit version recommended for compatibility)
+- **32-bit Microsoft Access Database Engine** (see installation steps below)
+- **Node.js** (only if using with Claude Desktop or Windsurf IDE)
 
-### Step 1: Install Required Drivers
+## Detailed Installation Guide
 
-1. Install the 32-bit Microsoft Access Database Engine 2016:
-   - Download from [Microsoft's website](https://www.microsoft.com/en-us/download/details.aspx?id=54920)
-   - Choose the 32-bit version (`AccessDatabaseEngine.exe`)
-   - Run the installer and follow the prompts
+### Step 1: Install Microsoft Access Database Engine (Required)
 
-### Step 2: Set Up Python Environment
+The Microsoft Access Database Engine provides the necessary ODBC drivers to connect to Access databases.
 
-1. Install Python 3.8 or higher (32-bit version recommended for compatibility)
-2. Clone this repository:
+1. Download the 32-bit Microsoft Access Database Engine 2016 from Microsoft's website:
+   - Go to: [https://www.microsoft.com/en-us/download/details.aspx?id=54920](https://www.microsoft.com/en-us/download/details.aspx?id=54920)
+   - Click "Download" and select **AccessDatabaseEngine.exe** (32-bit version)
+   - **Important:** You must use the 32-bit version even on 64-bit Windows
+
+2. Install the downloaded file:
+   - Run **AccessDatabaseEngine.exe** as administrator
+   - Follow the installation prompts
+   - If you already have a 64-bit Office installation, you may see a compatibility warning. Use the `/passive` flag to force installation:
+     ```
+     AccessDatabaseEngine.exe /passive
+     ```
+
+3. Verify installation:
+   - Open Control Panel > Administrative Tools > ODBC Data Sources (32-bit)
+   - You should see "Microsoft Access Driver (*.mdb, *.accdb)" in the Drivers tab
+
+### Step 2: Set Up the MCP Access Tool
+
+#### Option A: Simple Installation (Recommended)
+
+1. Install the package directly from PyPI:
    ```
-   git clone https://github.com/yourusername/Access_mdb.git
+   pip install mcp-access
+   ```
+
+#### Option B: Manual Installation from Source
+
+1. Download the tool files:
+   - Download and extract the ZIP file from the repository, or
+   - Clone the repository: `git clone https://github.com/yourusername/Access_mdb.git`
+
+2. Navigate to the directory:
+   ```
    cd Access_mdb
    ```
-3. Install the package:
+
+3. Install the package and dependencies:
    ```
    pip install -e .
    ```
 
-### Step 3: Test the Installation
+#### Option C: Minimal Manual Setup (Advanced)
 
-Run the simple client to test the connection:
+If you can't use git or pip, copy these essential files to a folder on your machine:
+
+1. Create a directory structure:
+   ```
+   mkdir -p mcp_access
+   ```
+
+2. Create these files:
+   - `mcp_access/__init__.py` (empty file)
+   - `mcp_access/__main__.py` (with import and main() call)
+   - `mcp_access/server.py` (with the MCP server code)
+   - `pyproject.toml` (with package metadata)
+   - `simple_client.py` (for testing)
+
+3. Install required dependencies manually:
+   ```
+   pip install mcp pyodbc anyio click
+   ```
+
+### Step 3: Verify Your Installation
+
+Run the test client to ensure everything is working:
+
 ```
 python simple_client.py
 ```
 
-## Manual Setup on Another Machine
+If you see connection errors:
+- Check that the database path in `simple_client.py` exists
+- Verify the 32-bit Access driver is installed correctly
+- Ensure you don't have the database open in another application
 
-If you want to set up this tool on another machine without using git, here are the minimal files you need to copy:
-
-### Essential Files:
-1. `mcp_access/__init__.py` - Makes the directory a Python package
-2. `mcp_access/__main__.py` - Entry point for running as a module
-3. `mcp_access/server.py` - Main server implementation with all the MCP tools
-4. `pyproject.toml` - Contains package metadata and dependencies
-5. `README.md` - Documentation
-6. `simple_client.py` - For testing the connection
-
-### After Copying Files:
-1. Install dependencies on the target machine:
-   ```
-   pip install mcp pyodbc anyio click
-   ```
-2. Install the 32-bit Microsoft Access Database Engine
-3. Run the server:
-   ```
-   python -m mcp_access
-   ```
-
-## Integration with LLM Tools
-
-### Claude Desktop Integration
+## Integrating with Claude Desktop
 
 1. Locate the Claude configuration file:
    - Windows: `%APPDATA%\Claude\claude_desktop_config.json`
@@ -85,16 +120,196 @@ If you want to set up this tool on another machine without using git, here are t
          "args": [
            "-m",
            "mcp_access"
-         ],
-         "cwd": "C:\\path\\to\\Access_mdb"
+         ]
        }
      }
    }
    ```
-   
+
 3. Restart Claude Desktop
 
-### Windsurf IDE Integration
+4. Test the connection by asking Claude:
+   ```
+   Connect to an MS Access database at C:\path\to\your\database.mdb
+   ```
+
+## Troubleshooting Guide
+
+### "Driver not found" Error
+
+**Problem:** You see an error message about missing Microsoft Access driver.
+
+**Solution:**
+1. Verify you installed the 32-bit Microsoft Access Database Engine
+2. Check that you're running the tool with a 32-bit Python interpreter
+3. On 64-bit Windows, be sure to use the 32-bit ODBC Administrator:
+   - Run: `C:\Windows\SysWOW64\odbcad32.exe`
+   - Verify "Microsoft Access Driver (*.mdb, *.accdb)" is listed
+
+### "Cannot install Access Database Engine" Error
+
+**Problem:** Installation fails with an error about Office 64-bit.
+
+**Solution:**
+1. Try installing with the /passive flag: `AccessDatabaseEngine.exe /passive`
+2. If that fails, you may need to temporarily uninstall 64-bit Office, install the 32-bit Access Database Engine, then reinstall Office
+
+### "Connection not found" Error in Claude
+
+**Problem:** Claude reports "Connection not found" when trying to use tools.
+
+**Solution:**
+1. Make sure you've connected first with the connect tool
+2. Check that you're using the filename as conn_id, not the full path
+3. Try connecting again if the connection might have timed out
+
+### "Table not found" Error
+
+**Problem:** Claude reports a table doesn't exist.
+
+**Solution:**
+1. Verify the table exists using list_tables_tool
+2. Check for typos in the table name
+3. For tables with spaces, ensure the name is in square brackets: `[Table Name]`
+
+## Common Commands for Claude
+
+When using this tool with Claude Desktop, here are the key commands to use:
+
+1. Connect to a database:
+   ```
+   connect(db_path="C:\\path\\to\\database.mdb")
+   ```
+
+2. List all tables:
+   ```
+   list_tables_tool(conn_id="database.mdb")
+   ```
+
+3. Get table schema:
+   ```
+   get_table_schema_tool(conn_id="database.mdb", table_name="tablename")
+   ```
+
+4. Query a table:
+   ```
+   query_table_tool(conn_id="database.mdb", table_name="tablename", limit=10)
+   ```
+
+5. Run a custom SQL query:
+   ```
+   execute_sql_tool(conn_id="database.mdb", sql_query="SELECT * FROM tablename")
+   ```
+
+6. Disconnect:
+   ```
+   disconnect(conn_id="database.mdb")
+   ```
+
+## Technical Notes for Advanced Users
+
+### Python Architecture Considerations
+
+This tool requires a 32-bit ODBC driver, which means:
+- The ODBC driver itself must be 32-bit
+- If running directly (not through Claude), you need a 32-bit Python interpreter
+- When running through Claude Desktop, Claude handles the process architecture
+
+### Environment Variables
+
+You can customize behavior with these environment variables:
+- `EXECUTE_QUERY_MAX_CHARS`: Maximum characters to display in query results (default: 4000)
+- `CLAUDE_LOCAL_FILES_PATH`: Path where result files should be saved for Claude's access
+
+### Connection Details
+
+- Connection IDs are based on the database filename, not the full path
+- Connections remain active until explicitly disconnected or the server is restarted
+- MS Access has a limit of 255 concurrent connections
+
+## Function List
+
+The MCP Access tool provides the following key functions:
+
+1. **connect_to_access_db**: Connects to an Access database using the 32-bit ODBC driver
+2. **list_tables**: Lists all tables in the Access database
+3. **query_table**: Queries data from a specific table
+4. **execute_sql**: Executes a custom SQL query
+5. **get_table_schema**: Gets basic schema information for a table
+6. **get_extended_schema**: Gets detailed schema with primary keys and indexes
+7. **format_results**: Formats query results in a clean vertical format
+8. **save_results_for_claude**: Saves large result sets for Claude to access
+
+## MCP Tool Commands
+
+The MCP Access tool exposes the following tools to LLMs:
+
+1. **connect**: Connect to an MS Access database
+2. **list_tables_tool**: List all tables in the database
+3. **filter_tables_tool**: List tables containing a specific substring
+4. **query_table_tool**: Query data from a table with formatting
+5. **execute_sql_tool**: Execute a custom SQL query
+6. **get_table_schema_tool**: Get detailed schema information
+7. **disconnect**: Disconnect from a database
+
+## Using the MCP Tool with LLMs
+
+### IMPORTANT: Instructions for LLMs
+
+If you are an LLM (like Claude or GPT) using this MCP tool in Windsurf or other environments, please follow these exact instructions to avoid failures:
+
+1. **Tool Names**: Use the EXACT tool names as specified below:
+   - `connect` - NOT "connect_to_database" or any variation
+   - `list_tables_tool` - NOT "list_tables" or "get_tables"
+   - `filter_tables_tool` - NOT "filter_tables" or "search_tables"
+   - `query_table_tool` - NOT "query_table" or "select_from_table"
+   - `execute_sql_tool` - NOT "execute_sql" or "run_sql"
+   - `get_table_schema_tool` - NOT "get_schema" or "describe_table"
+   - `disconnect` - NOT "close_connection" or "disconnect_from_database"
+
+2. **Parameter Names**: Use the EXACT parameter names:
+   - For connect: `db_path` (full path to .mdb file)
+   - For all other tools: `conn_id` (the database filename)
+   - For query/filter tools: `table_name`, `substring`, `limit`, `sql_query` as needed
+
+3. **Connection ID**: Always use the filename (e.g., "database.mdb") as the connection ID, not the full path.
+
+4. **SQL Syntax**: Use MS Access SQL syntax:
+   - Use `TOP n` instead of `LIMIT n` (e.g., "SELECT TOP 5 * FROM table")
+   - Enclose table/column names with spaces in square brackets (e.g., "[Table Name]")
+
+5. **Error Handling**: If a tool call fails:
+   - Check parameter names and values
+   - Verify the connection ID is correct
+   - Ensure the table name exists (use list_tables_tool first)
+   - Try again with corrected parameters
+
+### Example Workflow
+
+```
+# Step 1: Connect to the database
+connect(db_path="C:\\path\\to\\database.mdb")
+
+# Step 2: List all tables
+list_tables_tool(conn_id="database.mdb")
+
+# Step 3: Filter tables containing "customer"
+filter_tables_tool(conn_id="database.mdb", substring="customer")
+
+# Step 4: Get schema information
+get_table_schema_tool(conn_id="database.mdb", table_name="customers")
+
+# Step 5: Query data
+query_table_tool(conn_id="database.mdb", table_name="customers", limit=10)
+
+# Step 6: Execute a custom SQL query
+execute_sql_tool(conn_id="database.mdb", sql_query="SELECT TOP 5 * FROM customers WHERE region='North'")
+
+# Step 7: Disconnect
+disconnect(conn_id="database.mdb")
+```
+
+## Windsurf IDE Integration
 
 1. Open Windsurf IDE
 2. Click on the hammer icon in the Cascade toolbar
@@ -115,206 +330,6 @@ If you want to set up this tool on another machine without using git, here are t
    }
    ```
 5. Save and click "Refresh"
-
-## MCP Tool Commands Reference
-
-The MCP Access tool provides the following commands that can be used by LLMs:
-
-### 1. connect
-
-Connects to an MS Access database.
-
-**Parameters:**
-- `db_path`: Full path to the .mdb file
-
-**Example:**
-```
-connect(db_path="C:\\path\\to\\database.mdb")
-```
-
-### 2. list_tables_tool
-
-Lists all tables in the connected database.
-
-**Parameters:**
-- `conn_id`: Connection ID (filename of the database)
-
-**Example:**
-```
-list_tables_tool(conn_id="database.mdb")
-```
-
-### 3. query_table_tool
-
-Queries data from a specific table.
-
-**Parameters:**
-- `conn_id`: Connection ID (filename of the database)
-- `table_name`: Name of the table to query
-- `limit`: Maximum number of rows to return (default: 100)
-
-**Example:**
-```
-query_table_tool(conn_id="database.mdb", table_name="customers", limit=50)
-```
-
-### 4. execute_sql_tool
-
-Executes a custom SQL query.
-
-**Parameters:**
-- `conn_id`: Connection ID (filename of the database)
-- `sql_query`: SQL query to execute
-
-**Example:**
-```
-execute_sql_tool(conn_id="database.mdb", sql_query="SELECT * FROM customers WHERE region='North'")
-```
-
-### 5. get_table_schema_tool
-
-Gets the schema of a specific table.
-
-**Parameters:**
-- `conn_id`: Connection ID (filename of the database)
-- `table_name`: Name of the table to examine
-
-**Example:**
-```
-get_table_schema_tool(conn_id="database.mdb", table_name="customers")
-```
-
-### 6. disconnect
-
-Disconnects from a database.
-
-**Parameters:**
-- `conn_id`: Connection ID (filename of the database)
-
-**Example:**
-```
-disconnect(conn_id="database.mdb")
-```
-
-## Using the MCP Tool with LLMs
-
-### Step-by-Step Guide for Effective Prompting
-
-For LLMs to effectively use this MCP tool with MS Access databases, follow these steps:
-
-1. **Start with a clear database connection**:
-   ```
-   Connect to the MS Access database at C:\path\to\your\database.mdb
-   ```
-
-2. **After connecting, use the filename as the connection ID**:
-   - The connection ID is simply the filename of the database (e.g., "database.mdb")
-   - This ID must be used in all subsequent tool calls
-
-3. **Work in a specific order**:
-   1. First, connect to the database
-   2. Then list tables to explore the database
-   3. Use get_table_schema_tool to understand table structure
-   4. After that, query data or execute SQL
-
-4. **Always disconnect when done**:
-   ```
-   Disconnect from the database.mdb connection
-   ```
-
-### Example Conversation Flow with an LLM
-
-Here's a complete example of how to interact with an LLM using this tool:
-
-```
-User: Connect to the MS Access database at C:\path\to\database.mdb and list the tables.
-
-LLM: I'll connect to the database and list the tables for you.
-[Calls connect tool with db_path]
-[Calls list_tables_tool with conn_id="database.mdb"]
-Here are the tables in your database: [lists tables]
-
-User: Show me the schema of the customers table.
-
-LLM: I'll show you the schema of the customers table.
-[Calls get_table_schema_tool with conn_id="database.mdb", table_name="customers"]
-Here's the schema of the customers table: [shows schema]
-
-User: Get me all customers from the North region.
-
-LLM: I'll query the customers from the North region.
-[Calls execute_sql_tool with conn_id="database.mdb", sql_query="SELECT * FROM customers WHERE region='North'"]
-Here are the customers from the North region: [shows results]
-```
-
-## Troubleshooting Guide
-
-### Common Issues and Solutions
-
-#### 1. Tool Not Found Errors
-
-**Problem**: LLM returns "unknown tool name" or fails to use the correct tool.
-
-**Solution**:
-- Ensure you're providing the exact tool names as listed in this documentation
-- Remember all tool names end with "_tool" except "connect" and "disconnect"
-- The most common mistake is forgetting the "_tool" suffix on list_tables_tool, query_table_tool, etc.
-
-#### 2. Connection Issues
-
-**Problem**: "Error connecting to database" or similar messages.
-
-**Solution**:
-- Verify the database path is correct and the file exists
-- Ensure the 32-bit Microsoft Access Database Engine is installed
-- Check that the path uses double backslashes in Windows paths (C:\\path\\to\\file.mdb)
-- Make sure the MDB file isn't open in another application
-
-#### 3. SQL Syntax Errors
-
-**Problem**: "Syntax error in query expression" messages.
-
-**Solution**:
-- MS Access uses specific SQL syntax that differs from standard SQL:
-  - Use `TOP n` instead of `LIMIT n`
-  - Use `*` for wildcard selection, not `%`
-  - Date literals should be formatted as `#MM/DD/YYYY#`
-
-#### 4. LLM Looping or Confusion
-
-**Problem**: LLM keeps trying incorrect approaches or gets confused.
-
-**Solution**:
-- Reset the conversation and start with explicit step-by-step instructions
-- Provide complete examples of the exact command syntax
-- Remind the LLM of the connection ID (the database filename)
-- If using Windsurf IDE, try restarting the MCP server by clicking "Refresh"
-
-#### 5. Table or Field Not Found
-
-**Problem**: "Table or field not found" errors.
-
-**Solution**:
-- First list all tables with list_tables_tool to verify the table name
-- Get the table schema to verify field names
-- MS Access is case-insensitive for table and field names, but exact spelling matters
-
-### Verifying Tool Installation
-
-If you're unsure if the MCP tool is properly installed:
-
-1. Check if the MCP server appears in the hammer icon menu
-2. Try a basic connection test:
-   ```
-   Connect to an MS Access database at C:\path\to\any_existing.mdb
-   ```
-3. If the LLM reports it can't find the tool, check your configuration file
-
-### MS Access-Specific Notes
-
-1. MS Access has a 2GB file size limit
-2. It doesn't support nested queries as well as other database systems
-3. Table and column names with spaces need square brackets: `[Table Name]`
 
 ## Prompting Guide for LLMs
 
@@ -345,8 +360,10 @@ When working with LLMs like Claude or other models in Windsurf, use these prompt
    Show me the schema of the [table_name] table in the MS Access database
    ```
 
-## Troubleshooting
+## License
 
-- **Error: "Driver not found"**: Ensure you've installed the 32-bit Microsoft Access Database Engine
-- **Connection issues**: Verify the database path is correct and accessible
-- **Integration issues**: Check the configuration file syntax and paths
+MIT License
+
+## Acknowledgements
+
+This project uses the Model Context Protocol (MCP) developed by Anthropic for Claude AI.
