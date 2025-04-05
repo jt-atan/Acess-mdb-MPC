@@ -82,9 +82,9 @@ Make sure to:
        "access-mdb": {
          "command": "python",
          "args": [
-           "-m",
-           "server"
-         ]
+           "C:\\Users\\yourusername\\path\\to\\Access_mdb\\server.py"
+         ],
+         "cwd": "C:\\Users\\yourusername\\path\\to\\Access_mdb"
        }
      }
    }
