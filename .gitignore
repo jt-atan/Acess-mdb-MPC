@@ -31,6 +31,12 @@ wheels/
 *.accdb
 *.ldb
 
+# Explicitly include important project files
+!test_access_mcp.py
+!test_server.py
+!install_mcp.py
+!.windsurfrules
+
 # IDE specific files
 .idea/
 .vscode/

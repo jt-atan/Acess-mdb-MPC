@@ -13,6 +13,7 @@ A Model Context Protocol (MCP) tool for connecting to 32-bit Microsoft Access da
 - Improved result formatting with vertical display
 - Intelligent truncation for large result sets
 - Claude integration for large result sets
+- **Enhanced support for linked tables** - Now properly detects and lists linked tables from external MDB files
 
 ## Quick Setup Guide
 
@@ -68,7 +69,6 @@ Make sure to:
 1. Replace `yourusername` and `path\\to` with your actual path
 2. Use the full absolute path to the server.py file
 3. Set the correct working directory (cwd)
-4. If using a virtual environment, replace `"command": "python"` with the path to your virtual environment's Python interpreter (e.g., `"command": "C:\\Users\\yourusername\\path\\to\\Access_mdb\\venv\\Scripts\\python.exe"`)
 
 #### For Claude Desktop:
 
@@ -82,21 +82,6 @@ Make sure to:
      "mcpServers": {
        "access-mdb": {
          "command": "python",
-         "args": [
-           "C:\\Users\\yourusername\\path\\to\\Access_mdb\\server.py"
-         ],
-         "cwd": "C:\\Users\\yourusername\\path\\to\\Access_mdb"
-       }
-     }
-   }
-   ```
-
-   **Important Note**: If you installed the tool in a virtual environment, you must use the Python interpreter from that environment:
-   ```json
-   {
-     "mcpServers": {
-       "access-mdb": {
-         "command": "C:\\Users\\yourusername\\path\\to\\Access_mdb\\venv\\Scripts\\python.exe",
          "args": [
            "C:\\Users\\yourusername\\path\\to\\Access_mdb\\server.py"
          ],
@@ -126,7 +111,7 @@ list_tables_tool(conn_id="database.mdb")
    connect(db_path="C:\\path\\to\\database.mdb")
    ```
 
-2. **List all tables**:
+2. **List all tables** (including linked tables):
    ```
    list_tables_tool(conn_id="database.mdb")
    ```
@@ -136,25 +121,58 @@ list_tables_tool(conn_id="database.mdb")
    ```
    get_table_schema_tool(conn_id="database.mdb", table_name="tablename")
    ```
+   Note: Works with both regular and linked tables.
 
 4. **Query a table** (limit defaults to 100 rows):
    ```
    query_table_tool(conn_id="database.mdb", table_name="tablename", limit=10)
    ```
+   Note: Works with both regular and linked tables.
 
 5. **Run a custom SQL query**:
    ```
    execute_sql_tool(conn_id="database.mdb", sql_query="SELECT * FROM tablename WHERE column = 'value'")
+   ```
+   Advanced example with linked tables:
+   ```
+   execute_sql_tool(conn_id="database.mdb", sql_query="SELECT t1.field1, t2.field2 FROM local_table t1 JOIN linked_table t2 ON t1.id = t2.id")
    ```
 
 6. **Filter tables by name**:
    ```
    filter_tables_tool(conn_id="database.mdb", substring="user")
    ```
+   Example to filter linked tables (if they follow a naming pattern):
+   ```
+   filter_tables_tool(conn_id="database.mdb", substring="link_")
+   ```
 
 7. **Disconnect from database**:
    ```
    disconnect(conn_id="database.mdb")
+   ```
+
+
+### Working with Linked Tables
+
+Linked tables are fully supported and can be used like regular tables:
+
+1. **Finding linked tables**:
+   All linked tables are now included when using `list_tables_tool()`.
+   
+2. **Querying linked tables**:
+   ```
+   query_table_tool(conn_id="database.mdb", table_name="linked_table")
+   ```
+   
+3. **Joining local and linked tables**:
+   ```
+   execute_sql_tool(conn_id="database.mdb", sql_query="SELECT a.field1, b.field2 FROM local_table a JOIN linked_table b ON a.id = b.id")
+   ```
+   
+4. **Viewing linked table schema**:
+   ```
+   get_table_schema_tool(conn_id="database.mdb", table_name="linked_table")
    ```
 
 ### Advanced Usage
@@ -174,6 +192,16 @@ When querying large tables, use the limit parameter to restrict the number of ro
 ```
 query_table_tool(conn_id="database.mdb", table_name="large_table", limit=20)
 ```
+
+#### Working with Access Saved Queries
+
+While there is no dedicated API for saved queries, you can still execute them using the standard SQL execution tool:
+
+```
+execute_sql_tool(conn_id="database.mdb", sql_query="SELECT * FROM [QueryName]")
+```
+
+Note: In MS Access, saved queries can be referenced in SQL statements just like tables. The square brackets are important if the query name contains spaces.
 
 ## Troubleshooting Guide
 
@@ -205,6 +233,27 @@ query_table_tool(conn_id="database.mdb", table_name="large_table", limit=20)
 1. Verify the table exists using list_tables_tool
 2. Check for typos in the table name
 3. For tables with spaces, ensure the name is in square brackets: `[Table Name]`
+
+### Working with Linked Tables
+
+**Feature:** The connector now properly detects and lists linked tables from external MDB files.
+
+The tool uses two methods to detect linked tables:
+1. A more inclusive approach for detecting regular tables
+2. A specialized query to the MSysObjects system table to find linked tables (Type=6)
+
+**Notes:**
+- Linked tables may have their source files in different locations
+- All linked tables can be queried just like regular tables
+- If you need to filter only linked tables, use: `filter_tables_tool(conn_id="database.mdb", substring="desired_name")`
+
+## Recent Updates
+
+### Added Support for Linked Tables (April 2025)
+- Enhanced the `list_tables` function to properly detect linked tables (Type=6 in MSysObjects)
+- Added specialized query to MSysObjects to ensure linked tables are included in listings
+- Improved table type detection and filtering to include all relevant table types
+- Added debug output to help diagnose table detection issues
 
 ## Development and Contribution
 

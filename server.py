@@ -36,11 +36,43 @@ async def connect_to_access_db(
 async def list_tables(
     connection: pyodbc.Connection,
 ) -> list[str]:
-    """List all tables in the Access database."""
+    """List all tables in the Access database, including linked tables."""
     def _get_tables():
         cursor = connection.cursor()
+        # First, let's log all available table types for diagnostic purposes
+        table_types = set()
+        all_tables = []
+        for table in cursor.tables():
+            table_types.add(table.table_type)
+            all_tables.append((table.table_name, table.table_type))
+            
+        print(f"Available table types: {table_types}")
+            
+        # Print detected table types for debugging
+        print(f"Detected table types: {table_types}")
+        
+        # Access can use different designations for different types of tables
+        # Let's capture all actual tables excluding internal metadata tables
+        system_table_prefixes = ('MSys', '~TMP')
         tables = [table.table_name for table in cursor.tables() 
-                 if table.table_type == 'TABLE']
+                 if not any(table.table_name.startswith(prefix) for prefix in system_table_prefixes)
+                 or table.table_type == 'SYSTEM TABLE']  # Include system tables explicitly marked
+        
+        # Also try to get linked tables using a special query for Access
+        try:
+            linked_tables_cursor = connection.cursor()
+            # Query MSysObjects which contains information about all database objects including linked tables
+            linked_tables_cursor.execute("SELECT Name FROM MSysObjects WHERE Type=6")
+            linked_table_names = [row.Name for row in linked_tables_cursor.fetchall()]
+            linked_tables_cursor.close()
+            
+            # Add linked tables to our list if they're not already included
+            for linked_table in linked_table_names:
+                if linked_table not in tables:
+                    tables.append(linked_table)
+                    print(f"Added linked table from MSysObjects: {linked_table}")
+        except Exception as e:
+            print(f"Note: Could not retrieve linked tables from MSysObjects: {e}")
         cursor.close()
         return tables
     
