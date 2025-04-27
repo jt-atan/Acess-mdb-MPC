@@ -11,7 +11,7 @@ from mcp.server.fastmcp import FastMCP
 # Create the FastMCP server
 mcp = FastMCP("MS Access Connector")
 
-# Store connections in a dictionary
+# Store connections in a dictionary: {conn_id: {'conn': pyodbc.Connection, 'writable': bool}}
 connections = {}
 
 # Configuration constants
@@ -20,11 +20,21 @@ CLAUDE_FILES_PATH = os.environ.get('CLAUDE_LOCAL_FILES_PATH')
 
 async def connect_to_access_db(
     db_path: str,
+    writable: bool = False # Default to read-only
 ) -> pyodbc.Connection:
     """Connect to an Access database using the 32-bit ODBC driver."""
     # Note: Must be running on Windows with 32-bit Access ODBC driver installed
-    connection_string = f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={db_path};"
+    base_conn_string = f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={db_path};"
     
+    if writable:
+        # Use Share Deny None for better concurrency when writes might be needed
+        connection_string = base_conn_string + "Mode=Share Deny None;"
+        print(f"Connecting to {os.path.basename(db_path)} in SHARED Writable mode.", file=sys.stderr)
+    else:
+        # Default to ReadOnly to prevent locking
+        connection_string = base_conn_string + "ReadOnly=True;"
+        print(f"Connecting to {os.path.basename(db_path)} in ReadOnly mode.", file=sys.stderr)
+        
     # Use a thread pool to run ODBC operations asynchronously
     # since pyodbc operations are blocking
     connection = await anyio.to_thread.run_sync(
@@ -83,7 +93,7 @@ async def list_tables(
 async def query_table(
     connection: pyodbc.Connection,
     table_name: str,
-    limit: int = 100,
+    limit: int = 3, # Keep the default limit low
 ) -> list[dict]:
     """Query data from a table."""
     def _run_query():
@@ -290,11 +300,16 @@ def save_results_for_claude(results):
 # Define MCP tools using FastMCP decorators
 
 @mcp.tool()
-async def connect(db_path: str) -> str:
-    """Connect to an MS Access database
+async def connect(db_path: str, writable: bool = False) -> str:
+    """Connect to an MS Access database.
+
+    Defaults to a ReadOnly connection to minimize file locking.
+    Set writable=True to connect in a shared mode allowing writes (if permissions allow) 
+    and better concurrency for other users.
 
     Args:
         db_path: Path to the MS Access .mdb or .accdb file
+        writable: If True, connect in shared/writable mode. Defaults to False (ReadOnly).
 
     Returns:
         A message indicating success or failure. 
@@ -302,13 +317,36 @@ async def connect(db_path: str) -> str:
         which should be used in subsequent tool calls.
     """
     conn_id = os.path.basename(db_path)
-    
+    mode_text = "SHARED Writable" if writable else "ReadOnly"
+
+    if conn_id in connections:
+        current_writable = connections[conn_id]['writable']
+        if writable == current_writable:
+            return f"Already connected to {conn_id} in {mode_text} mode."
+        else:
+            # Mode change requested, disconnect old connection first
+            print(f"Mode change requested for {conn_id}. Reconnecting in {mode_text} mode.", file=sys.stderr)
+            try:
+                old_conn = connections[conn_id]['conn']
+                await anyio.to_thread.run_sync(lambda: old_conn.close())
+                del connections[conn_id]
+                print(f"Closed previous connection to {conn_id}.", file=sys.stderr)
+            except Exception as e:
+                # Log error but try to continue connecting
+                print(f"Error closing previous connection for {conn_id}: {e}", file=sys.stderr)
+                # Ensure entry is removed if disconnect failed partially
+                if conn_id in connections:
+                     del connections[conn_id]
+
+    # Proceed with new connection or reconnection
     try:
-        connection = await connect_to_access_db(db_path)
-        connections[conn_id] = connection
-        return f"Successfully connected to database: {db_path}"
+        connection = await connect_to_access_db(db_path, writable=writable)
+        connections[conn_id] = {'conn': connection, 'writable': writable}
+        return f"Successfully connected to {conn_id} in {mode_text} mode. Use '{conn_id}' as the conn_id for other tools."
+    except pyodbc.Error as e:
+        return f"Database Error connecting in {mode_text} mode: {str(e)}"
     except Exception as e:
-        return f"Error connecting to database: {str(e)}"
+        return f"Error connecting in {mode_text} mode: {str(e)}"
 
 
 @mcp.tool()
@@ -322,22 +360,25 @@ async def list_tables_tool(conn_id: str, full: bool = False) -> str:
         A formatted list of table names, with a prompt if there are more than 5.
     """
     if conn_id not in connections:
-        return f"Connection {conn_id} not found"
+        return f"Connection {conn_id} not found. Use the 'connect' tool first."
+    
     try:
-        tables = await list_tables(connections[conn_id])
-        total = len(tables)
-        preview = tables[:5]
-        output = "\n".join(preview)
-        print(f"[DEBUG] list_tables_tool: {total} tables found. Returning preview={not full}.")
-        if not full and total > 5:
-            output += (
-                f"\n\nShowing 5 of {total} tables."
-                f"\nThere are {total - 5} more tables."
-                f"\nWould you like to see the full list? (Call again with full=True)"
-            )
-        elif full:
-            output = "\n".join(tables)
+        connection = connections[conn_id]['conn'] # Access connection object
+        all_tables = await list_tables(connection)
+        if not all_tables:
+            return f"No tables found for connection {conn_id}"
+        
+        display_limit = None if full else 5
+        output_tables = all_tables[:display_limit]
+        
+        output = f"Tables for {conn_id}:\n" + "\n".join(output_tables)
+        
+        if not full and len(all_tables) > 5:
+            output += f"\n... ({len(all_tables) - 5} more tables available. Set full=True to see all.)"
+            
         return output
+    except pyodbc.Error as e:
+        return f"Database Error listing tables: {str(e)}"
     except Exception as e:
         return f"Error listing tables: {str(e)}"
 
@@ -354,25 +395,27 @@ async def filter_tables_tool(conn_id: str, substring: str, full: bool = False) -
         A formatted list of matching table names, with a prompt if there are more than 5.
     """
     if conn_id not in connections:
-        return f"Connection {conn_id} not found"
+        return f"Connection {conn_id} not found. Use the 'connect' tool first."
+    
     try:
-        all_tables = await list_tables(connections[conn_id])
-        filtered_tables = [table for table in all_tables if substring.lower() in table.lower()]
-        total = len(filtered_tables)
-        preview = filtered_tables[:5]
-        output = "\n".join(preview)
-        print(f"[DEBUG] filter_tables_tool: {total} tables match '{substring}'. Returning preview={not full}.")
-        if not full and total > 5:
-            output += (
-                f"\n\nShowing 5 of {total} matching tables."
-                f"\nThere are {total - 5} more tables."
-                f"\nWould you like to see the full list? (Call again with full=True)"
-            )
-        elif full:
-            output = "\n".join(filtered_tables)
+        connection = connections[conn_id]['conn'] # Access connection object
+        all_tables = await list_tables(connection)
+        filtered_tables = [t for t in all_tables if substring.lower() in t.lower()]
+        
         if not filtered_tables:
-            return f"No tables found containing '{substring}'"
+            return f"No tables found containing '{substring}' for connection {conn_id}"
+        
+        display_limit = None if full else 5
+        output_tables = filtered_tables[:display_limit]
+        
+        output = f"Tables containing '{substring}' for {conn_id}:\n" + "\n".join(output_tables)
+        
+        if not full and len(filtered_tables) > 5:
+            output += f"\n... ({len(filtered_tables) - 5} more matching tables available. Set full=True to see all.)"
+            
         return output
+    except pyodbc.Error as e:
+        return f"Database Error filtering tables: {str(e)}"
     except Exception as e:
         return f"Error filtering tables: {str(e)}"
 
@@ -390,33 +433,40 @@ async def query_table_tool(conn_id: str, table_name: str, limit: int = 3) -> str
         Formatted query results
     """
     if conn_id not in connections:
-        return f"Connection {conn_id} not found"
+        return f"Connection {conn_id} not found. Use the 'connect' tool first."
     
     try:
-        results = await query_table(connections[conn_id], table_name, limit)
+        connection = connections[conn_id]['conn'] # Access connection object
+        data = await query_table(connection, table_name, limit)
+        if not data:
+            return f"No data found in table '{table_name}' for connection {conn_id}"
         
-        if not results:
-            return f"No data found in table '{table_name}'"
+        # Use the enhanced formatter
+        row_displayed = 10  # Maximum rows to display inline
+        formatted_output = format_results(data[:row_displayed], max_chars=EXECUTE_QUERY_MAX_CHARS)
+        
+        # Add a message if more rows were fetched but not displayed
+        actual_retrieved = len(data)
+        if actual_retrieved > row_displayed:
+            formatted_output += f"\n... Displaying first {row_displayed} of {actual_retrieved} rows retrieved (query limit was {limit})."
+        elif actual_retrieved < limit:
+             formatted_output += f"\n(Retrieved {actual_retrieved} rows, which is less than the limit of {limit})"
+        else: # retrieved == limit
+            formatted_output += f"\n(Retrieved {actual_retrieved} rows, reaching the limit of {limit})"
             
-        # Format the results using the improved formatter
-        formatted_output, row_displayed = format_results(results)
-        
         # For large result sets, save them for Claude
-        if len(results) > row_displayed and CLAUDE_FILES_PATH:
-            claude_link = save_results_for_claude(results)
+        if actual_retrieved > row_displayed and CLAUDE_FILES_PATH:
+            claude_link = save_results_for_claude(data)
             formatted_output += claude_link
             
         return formatted_output
     except pyodbc.Error as e:
-        error_msg = str(e)
-        suggestions = ""
-        
-        if "not a valid name" in error_msg.lower():
-            suggestions = "\nPossible fix: Make sure the table name is correct and enclosed in square brackets if it contains spaces or special characters."
-            
-        return f"Database Error: {error_msg}{suggestions}"
+        # Check if it's a read-only error
+        if connections[conn_id]['writable'] is False and ('Update locks invalid' in str(e) or 'Operation must use an updateable query' in str(e)):
+             return f"Database Error: Cannot perform this operation on table '{table_name}' because the connection is ReadOnly. Reconnect with writable=True if modification is needed. Original error: {str(e)}"
+        return f"Database Error querying table '{table_name}': {str(e)}"
     except Exception as e:
-        return f"Error querying table: {str(e)}"
+        return f"Error querying table '{table_name}': {str(e)}"
 
 
 @mcp.tool()
@@ -431,39 +481,63 @@ async def execute_sql_tool(conn_id: str, sql_query: str) -> str:
         Formatted query results or command results
     """
     if conn_id not in connections:
-        return f"Connection {conn_id} not found"
-    
-    try:
-        result = await execute_sql(connections[conn_id], sql_query)
+        return f"Connection {conn_id} not found. Use the 'connect' tool first."
         
-        if result["result_type"] == "command":
-            return f"Command executed successfully. Rows affected: {result['rows_affected']}"
-        else:
-            data = result["data"]
-            if not data:
-                return "Query executed successfully. No rows returned."
-                
-            # Format the results using the improved formatter
-            formatted_output, row_displayed = format_results(data)
+    is_readonly = not connections[conn_id]['writable']
+    is_select_query = sql_query.strip().lower().startswith('select')
+
+    # Basic check for modification attempts on a read-only connection
+    if is_readonly and not is_select_query:
+        return f"Error: Cannot execute modification SQL ('{sql_query[:50]}...') on a ReadOnly connection. Reconnect with writable=True."
+
+    try:
+        connection = connections[conn_id]['conn'] # Access connection object
+        result_dict = await execute_sql(connection, sql_query)
+        
+        # Handle results or errors from execute_sql
+        if isinstance(result_dict, str): # execute_sql returned an error string
+            # Check if it's a known read-only error
+            if is_readonly and ('Update locks invalid' in result_dict or 'Operation must use an updateable query' in result_dict):
+                return f"Database Error: Cannot execute SQL because the connection is ReadOnly. Reconnect with writable=True if modification is needed. Original error: {result_dict}"
+            return result_dict
             
-            # For large result sets, save them for Claude
-            if len(data) > row_displayed and CLAUDE_FILES_PATH:
-                claude_link = save_results_for_claude(data)
-                formatted_output += claude_link
-                
-            return formatted_output
+        data = result_dict.get('data', [])
+        rows_affected = result_dict.get('rows_affected', None)
+
+        if rows_affected is not None:
+            return f"Command executed successfully. Rows affected: {rows_affected}"
+        elif not data and is_select_query:
+            return f"Query executed successfully, but returned no results."
+        elif not data:
+             return f"Command executed, returned no data (as expected for non-SELECT)."
+        
+        # Format SELECT results
+        row_displayed = 10  # Maximum rows to display inline
+        formatted_output = format_results(data[:row_displayed], max_chars=EXECUTE_QUERY_MAX_CHARS)
+        
+        # Add message about displayed rows
+        if len(data) > row_displayed:
+            formatted_output += f"\n... Displaying first {row_displayed} of {len(data)} rows retrieved."
+            
+        # For large result sets, save them for Claude
+        if len(data) > row_displayed and CLAUDE_FILES_PATH:
+            claude_link = save_results_for_claude(data)
+            formatted_output += claude_link
+            
+        return formatted_output
     except pyodbc.Error as e:
         error_msg = str(e)
+        # Check if it's a known read-only error
+        if is_readonly and ('Update locks invalid' in error_msg or 'Operation must use an updateable query' in error_msg):
+             return f"Database Error: Cannot execute SQL because the connection is ReadOnly. Reconnect with writable=True if modification is needed. Original error: {error_msg}"
+        # Add helpful suggestions based on common errors (copied from original)
         suggestions = ""
-        
-        # Add helpful suggestions based on common errors
         if "syntax error" in error_msg.lower():
             suggestions = "\nPossible fix: Check your SQL syntax for errors."
         elif "no such table" in error_msg.lower() or "invalid object name" in error_msg.lower():
             suggestions = "\nPossible fix: Verify the table name exists."
         elif "ambiguous column name" in error_msg.lower():
             suggestions = "\nPossible fix: Fully qualify column names with table names."
-            
         return f"SQL Error: {error_msg}{suggestions}"
     except Exception as e:
         return f"Error executing query: {str(e)}"
@@ -481,38 +555,49 @@ async def get_table_schema_tool(conn_id: str, table_name: str) -> str:
         Formatted schema information
     """
     if conn_id not in connections:
-        return f"Connection {conn_id} not found"
+        return f"Connection {conn_id} not found. Use the 'connect' tool first."
     
     try:
-        schema_info = await get_extended_schema(connections[conn_id], table_name)
+        connection = connections[conn_id]['conn'] # Access connection object
+        schema_info = await get_extended_schema(connection, table_name)
         
         # Format the schema information in a readable way
-        output = [f"Schema for table '{table_name}':"]
+        output = [f"Schema for table '{table_name}' (Connection: {conn_id}, Mode: {'Writable' if connections[conn_id]['writable'] else 'ReadOnly'}):"]
         output.append("\nCOLUMNS:")
         
-        for column in schema_info["columns"]:
-            pk_indicator = "[PK] " if column.get("primary_key") else ""
-            nullable = "NULL" if column.get("nullable") else "NOT NULL"
-            output.append(f"  {pk_indicator}{column['name']}: {column['type']}, {nullable}")
+        if not schema_info["columns"]:
+             output.append("  (No columns found or error retrieving columns)")
+        else:
+            for column in schema_info["columns"]:
+                pk_indicator = "[PK] " if column.get("primary_key") else ""
+                nullable = "NULL" if column.get("nullable") else "NOT NULL"
+                col_type = column.get('type', 'UNKNOWN')
+                output.append(f"  {pk_indicator}{column['name']}: {col_type}, {nullable}")
         
         # Add primary key information
         if schema_info["primary_keys"]:
             output.append("\nPRIMARY KEYS:")
             for pk in schema_info["primary_keys"]:
                 output.append(f"  {pk}")
+        else:
+            output.append("\nPRIMARY KEYS: (None found)")
         
         # Add index information
         if schema_info["indexes"]:
             output.append("\nINDEXES:")
             for idx in schema_info["indexes"]:
                 unique = "UNIQUE " if idx.get("unique") else ""
-                output.append(f"  {unique}INDEX {idx['name']} on {idx['column']}")
-        
+                idx_name = idx.get('name', 'UNKNOWN')
+                idx_col = idx.get('column', 'UNKNOWN')
+                output.append(f"  {unique}INDEX {idx_name} on {idx_col}")
+        else: 
+            output.append("\nINDEXES: (None found)")
+
         return "\n".join(output)
     except pyodbc.Error as e:
-        return f"Database Error: {str(e)}"
+        return f"Database Error getting schema for '{table_name}': {str(e)}"
     except Exception as e:
-        return f"Error getting table schema: {str(e)}"
+        return f"Error getting table schema for '{table_name}': {str(e)}"
 
 
 @mcp.tool()
@@ -529,11 +614,17 @@ async def disconnect(conn_id: str) -> str:
         return f"Connection {conn_id} not found"
     
     try:
-        await anyio.to_thread.run_sync(lambda: connections[conn_id].close())
+        connection_info = connections[conn_id]
+        connection = connection_info['conn']
+        mode_text = "Writable" if connection_info['writable'] else "ReadOnly"
+        await anyio.to_thread.run_sync(lambda: connection.close())
         del connections[conn_id]
-        return f"Successfully disconnected from {conn_id}"
+        return f"Successfully disconnected from {conn_id} (was {mode_text} mode)"
     except Exception as e:
-        return f"Error disconnecting: {str(e)}"
+        # Attempt to remove entry even if close fails
+        if conn_id in connections:
+            del connections[conn_id]
+        return f"Error disconnecting from {conn_id}: {str(e)}. Connection entry removed."
 
 
 def main():

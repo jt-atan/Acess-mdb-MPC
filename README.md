@@ -15,6 +15,19 @@ A Model Context Protocol (MCP) tool for connecting to 32-bit Microsoft Access da
 - Claude integration for large result sets
 - **Enhanced support for linked tables** - Now properly detects and lists linked tables from external MDB files
 
+## Connection Modes (Read-Only vs. Writable)
+
+To minimize issues with file locking where the MCP prevents other users or applications from accessing the `.mdb`/`.accdb` file, this MCP primarily uses **ReadOnly** connections by default.
+
+*   **Default (ReadOnly):** When you use the `connect` tool without specifying `writable=True`, the connection is made in ReadOnly mode. This is suitable for most query operations (`list_tables`, `query_table`, `get_schema`, `execute_sql` with `SELECT`) and significantly reduces the chance of locking the database file.
+*   **Writable Mode:** If you need the LLM to perform actions that modify the database (e.g., using `execute_sql` to run `INSERT`, `UPDATE`, or `DELETE` commands), you **must** connect using the `writable=True` flag:
+    ```
+    @mcp2_connect(db_path='C:\path\to\your\database.mdb', writable=True)
+    ```
+    This uses `Mode=Share Deny None` in the connection string, which requests a connection that allows modifications (if database permissions permit) while trying to allow other users concurrent access.
+
+**Note:** Attempting to run modification SQL (like `INSERT`, `UPDATE`, `DELETE`) on a ReadOnly connection will result in an error.
+
 ## Quick Setup Guide
 
 This guide assumes you already have 32-bit Microsoft Access Database Engine installed on your machine.
